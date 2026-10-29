@@ -239,6 +239,19 @@ echo 'OSIRIS_LOCAL_LLM_URL=http://localhost:11434/v1' >> .env
 npm run dev
 ```
 
+**Starting and stopping Ollama** (macOS with Homebrew; on other systems `ollama serve` works the same):
+
+```bash
+ollama serve                   # runs while this terminal is open; Ctrl+C stops it
+# or in the background:
+brew services start ollama     # also starts at every login until stopped
+brew services stop ollama      # stop it when you're done
+
+curl http://localhost:11434/v1/models   # check: lists your models, or "connection refused" if it is not running
+```
+
+"address already in use" from `ollama serve` means it is already running in the background.
+
 In OI, open the engine menu, choose **Local**, then **List models**. Any OpenAI-compatible server works the same way (OmniRoute, LM Studio); set `OSIRIS_LOCAL_LLM_KEY` if yours wants a key. Under Docker, use `http://host.docker.internal:11434/v1`.
 
 The address is read only from the server's `.env`, never from a request, so a visitor cannot point OSIRIS at another host. Local models are slower than hosted ones: a quick forecast is the place to start, and vehicle identification needs a vision model (gemma3, llava, qwen2.5vl).
