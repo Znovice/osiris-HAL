@@ -18,7 +18,7 @@ git clone https://github.com/simplifaisoul/osiris.git
 cd osiris
 
 # optional: configure keys / scanner backend
-cp .env.template .env        # then edit .env
+cp .env.example .env        # then edit .env
 
 docker compose up -d
 ```
@@ -109,7 +109,7 @@ metadata.
 
 ## 3. API keys & data sources
 
-Copy `.env.template` to `.env` and fill in only what you need.
+Copy `.env.example` to `.env` and fill in only what you need.
 
 ### What the code actually reads today
 
@@ -157,7 +157,7 @@ key stays on the server; without it that operator is simply not shown.
 A refused key shows as "key refused" on that operator in `/api/transit`.
 
 > Keep `.env` out of version control — it is already in `.gitignore`. Only
-> `.env.template` (no secrets) is committed.
+> `.env.example` (no secrets) is committed.
 
 ### Optional runtime overrides
 

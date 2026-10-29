@@ -108,6 +108,7 @@ Osiris is a production-grade OSINT platform that provides situational awareness 
 **OI Forecast**: a prediction engine inspired by the community-made [Pythia](https://github.com/jangles-byte/Pythia) and by [MiroFish](https://github.com/666ghj/MiroFish). From Pythia comes the idea of forecasting from the live world OSIRIS already watches; from MiroFish, the method: cast the actors who shape an outcome and play them against each other in parallel simulated worlds. Ask a question and OI researches it from sources you can check (news, prices, prediction markets and the live feeds), runs the worlds, and has a report agent weigh the result against the crowd's price and a statistical baseline before it writes a calibrated forecast, every claim linked to its source. The whole run plays out on the globe as it happens.
 - **Your own data**: add files (CSV, JSON, Markdown, text, logs, web pages) or paste up to 100,000 characters. The world model reads it once; or have every actor read it in every period, and quote it. The extra input tokens are shown before you run, on your own key.
 - **Your own key**: OpenAI, Anthropic, Google Gemini, OpenRouter, Groq, DeepSeek, xAI, Mistral or Qwen. Kept in your browser, sent per request in a header, never stored on the server.
+- **Or your own machine**: point OI at Ollama or any OpenAI-compatible server and it runs locally, with no key at all. See [Run OI on a local model](#run-oi-on-a-local-model-ollama).
 - **REST API** under `/api/oi` with live Server-Sent Events, and an **MCP server** at `/api/mcp` so agents such as Hermes, Claude and Cursor can run predictions, steer them and read OSIRIS intelligence. See [the docs](https://osirisai.live/docs#oi).
 
 ### Texas CCTV
@@ -180,7 +181,7 @@ Open [http://localhost:3000](http://localhost:3000)
 ```bash
 git clone https://github.com/simplifaisoul/osiris.git
 cd osiris
-cp .env.template .env     # optional — configure keys / port
+cp .env.example .env     # optional — configure keys / port
 docker compose up -d
 ```
 
@@ -204,7 +205,7 @@ editing the compose file.
 ### Environment Variables
 
 OSIRIS works **partially without any API keys** — all core feeds use public,
-keyless sources. Copy [`.env.template`](.env.template) to `.env` and set only
+keyless sources. Copy [`.env.example`](.env.example) to `.env` and set only
 what you need:
 
 ```env
@@ -226,6 +227,25 @@ AIS_API_KEY=                 # aisstream.io maritime
 
 > Without `SCANNER_URL`/`SCANNER_KEY` the RECON toolkit returns `503`; every
 > other layer works out of the box. `.env` is gitignored — only the template is committed.
+
+### Run OI on a local model (Ollama)
+
+OI can run on a model on your own machine instead of a cloud key. Nothing leaves your computer and nothing is billed.
+
+```bash
+ollama pull qwen3.5:9b          # or any chat model you like
+cp .env.example .env            # if you have not already
+echo 'OSIRIS_LOCAL_LLM_URL=http://localhost:11434/v1' >> .env
+npm run dev
+```
+
+In OI, open the engine menu, choose **Local**, then **List models**. Any OpenAI-compatible server works the same way (OmniRoute, LM Studio); set `OSIRIS_LOCAL_LLM_KEY` if yours wants a key. Under Docker, use `http://host.docker.internal:11434/v1`.
+
+The address is read only from the server's `.env`, never from a request, so a visitor cannot point OSIRIS at another host. Local models are slower than hosted ones: a quick forecast is the place to start, and vehicle identification needs a vision model (gemma3, llava, qwen2.5vl).
+
+### Who can reach it
+
+By default OSIRIS listens on **this machine only** (`127.0.0.1`), under both `npm run dev` and Docker. To open it to your network set `OSIRIS_HOST=0.0.0.0` (npm) or `OSIRIS_BIND=0.0.0.0` (Docker), but know that anyone who can reach it can then use the OI engine, including your local model. Put your own authenticated reverse proxy in front before doing that.
 
 ---
 

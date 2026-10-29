@@ -14,7 +14,7 @@ services:
     # can then use the OI engine, including a local model.
     ports:
       - "${OSIRIS_BIND:-127.0.0.1}:${OSIRIS_PORT:-3000}:3000"
-    # Optional API keys / scanner backend — copy .env.template to .env and
+    # Optional API keys / scanner backend — copy .env.example to .env and
     # fill in what you need. Missing file is ignored (keyless feeds still work).
     env_file:
       - path: .env
