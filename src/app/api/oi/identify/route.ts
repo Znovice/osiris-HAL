@@ -34,8 +34,9 @@ export async function POST(req: Request) {
   const info = providerInfo(creds.provider);
   if (!creds.key && info.needsKey) return fail(401, `Identifying vehicles runs on your own ${info.name} key.`);
   const model = creds.model || info.defaultModel;
-  if (info.needsKey && !canSeeImages(creds.provider, model)) {
-    return fail(400, `${model} cannot read pictures. Choose a vision model in OI (Claude, GPT-4o or newer, Gemini, Pixtral…) to identify vehicles.`);
+  if (creds.provider !== 'demo' && !canSeeImages(creds.provider, model)) {
+    const examples = creds.provider === 'local' ? 'gemma3, llava, qwen2.5vl, llama3.2-vision…' : 'Claude, GPT-4o or newer, Gemini, Pixtral…';
+    return fail(400, `${model} cannot read pictures. Choose a vision model in OI (${examples}) to identify vehicles.`);
   }
 
   const crops = (Array.isArray(body.crops) ? body.crops : [])

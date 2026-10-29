@@ -5,13 +5,18 @@
  * the server makes these requests, and a caller-chosen URL would turn the
  * engine into a relay into anything the server can reach.
  *
+ * The one exception is `local`, a model the operator runs themselves (Ollama,
+ * LM Studio, OmniRoute, any OpenAI-compatible server). Its address comes only
+ * from the server's own environment (OSIRIS_LOCAL_LLM_URL), never from a
+ * request, so a caller still cannot point the engine anywhere new.
+ *
  * Keys are used for the request in hand and never stored, logged or echoed.
  * Every message that leaves this module has been through `scrub`.
  */
 import { createDemoChat } from './demo';
 
 export type ProviderId =
-  | 'openai' | 'anthropic' | 'google' | 'openrouter' | 'groq' | 'deepseek' | 'xai' | 'mistral' | 'qwen' | 'demo';
+  | 'openai' | 'anthropic' | 'google' | 'openrouter' | 'groq' | 'deepseek' | 'xai' | 'mistral' | 'qwen' | 'local' | 'demo';
 
 type Wire = 'openai' | 'anthropic' | 'google' | 'demo';
 
@@ -86,13 +91,69 @@ const DEFS: ProviderDef[] = ([
     defaultModel: 'qwen-plus', suggested: ['qwen-plus', 'qwen-max', 'qwen-turbo'], concurrency: 4,
   },
   {
+    // A model the operator runs: Ollama by default. The address is read from the server's environment on each call (localBase), never from a request.
+    id: 'local', name: 'Local (Ollama)', wire: 'openai', base: '',
+    keyUrl: 'https://ollama.com/download', keyHint: 'no key needed',
+    defaultModel: 'qwen3.5:9b', suggested: ['qwen3.5:9b', 'llama3.2', 'gemma3', 'mistral-small'],
+    // One machine, one model in memory: calls in parallel only queue, and risk timing out while they wait.
+    concurrency: 1,
+  },
+  {
     // Scripted answers for development and tests: the whole pipeline, no key, no cost. Never offered in production.
     id: 'demo', name: 'Demo (scripted, dev only)', wire: 'demo', base: '',
     keyUrl: '', keyHint: 'no key needed', defaultModel: 'scripted', suggested: ['scripted'], concurrency: 4,
   },
 ] as Omit<ProviderDef, 'needsKey'>[])
   .filter(d => d.id !== 'demo' || process.env.NODE_ENV !== 'production')
-  .map(d => ({ ...d, needsKey: d.id !== 'demo' }));
+  .map(d => ({ ...d, needsKey: d.id !== 'demo' && d.id !== 'local' }));
+
+/* ───────────────────────────── Local model ───────────────────────────── */
+
+/** Ollama's OpenAI-compatible endpoint, the address a fresh install listens on. */
+export const OLLAMA_DEFAULT_URL = 'http://localhost:11434/v1';
+
+/**
+ * The local model's base URL, from the server's environment only. Empty when
+ * none is configured, or when the value is not a plain http(s) URL.
+ */
+export function localBase(env: Record<string, string | undefined> = process.env): string {
+  const raw = (env.OSIRIS_LOCAL_LLM_URL ?? '').trim();
+  if (!raw) return '';
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+    if (u.username || u.password) return '';
+    return u.toString().replace(/\/+$/, '');
+  } catch {
+    return '';
+  }
+}
+
+/** A local model is slower than a hosted one, and the first call also loads it into memory. */
+function localTimeoutMs(env: Record<string, string | undefined> = process.env): number {
+  const n = Number(env.OSIRIS_LOCAL_LLM_TIMEOUT_MS);
+  return Number.isFinite(n) && n >= 10_000 ? Math.min(n, 30 * 60_000) : 5 * 60_000;
+}
+
+const LOCAL_NOT_SET = `No local model is configured on this server. Set OSIRIS_LOCAL_LLM_URL in .env (for Ollama: ${OLLAMA_DEFAULT_URL}) and restart OSIRIS.`;
+
+/** The definition with its address filled in for this call. Throws when a local model is chosen but not configured. */
+function resolve(def: ProviderDef): ProviderDef {
+  if (def.id !== 'local') return def;
+  const base = localBase();
+  if (!base) throw new ProviderError('bad_request', LOCAL_NOT_SET);
+  return { ...def, base };
+}
+
+/** Drops a leading <think>…</think> block, and an unclosed one that ran out of tokens before the answer. */
+export function stripThinking(text: string): string {
+  return text.replace(/^\s*<think>[\s\S]*?<\/think>\s*/i, '').replace(/^\s*<think>[\s\S]*$/i, '');
+}
+
+/** The key a local call sends: the caller's if they gave one, else the server's own (OmniRoute and LM Studio may want one), else none. */
+function localKey(key: string): string {
+  return key || (process.env.OSIRIS_LOCAL_LLM_KEY ?? '').trim();
+}
 
 const BY_ID = new Map(DEFS.map(d => [d.id, d]));
 
@@ -258,6 +319,8 @@ export function canSeeImages(provider: ProviderId, model: string): boolean {
     case 'xai': return /grok-4|vision/.test(m);
     case 'mistral': return /pixtral|mistral-(small|medium)|magistral/.test(m);
     case 'qwen': return /vl|omni|qvq/.test(m);
+    // Ollama's vision families. A guess like the rest: a text-only model is asked again without the picture.
+    case 'local': return /llava|bakllava|vision|[-.]vl|vl[:-]|qwen\d?(\.\d)?-?vl|gemma3|minicpm-v|moondream|llama4|mistral-small3|granite3\.2-vision/.test(m);
     default: return false;
   }
 }
@@ -306,7 +369,8 @@ function buildRequest(def: ProviderDef, key: string, model: string, req: ChatReq
   }
   const reasoning = def.id === 'openai' && openaiReasoning(model);
   const completion = r.completionTokens || def.id === 'openai';
-  const headers: Record<string, string> = { 'content-type': 'application/json', authorization: `Bearer ${key}` };
+  // A local server may run without a key; send no Authorization at all rather than an empty bearer.
+  const headers: Record<string, string> = { 'content-type': 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}) };
   if (def.id === 'openrouter') {
     headers['HTTP-Referer'] = 'https://osirisai.live';
     headers['X-Title'] = 'OSIRIS OI';
@@ -395,6 +459,7 @@ async function send(def: ProviderDef, key: string, url: string, init: RequestIni
   } catch (err) {
     if (req.signal?.aborted) throw req.signal.reason ?? err;
     if (timeout.aborted) throw new ProviderError('timeout', `${def.name} did not answer in time`);
+    if (def.id === 'local') throw new ProviderError('network', `Could not reach the local model at ${def.base}. Is Ollama running (ollama serve)?`);
     throw new ProviderError('network', `Could not reach ${def.name}`);
   }
   const body = await res.text().catch(() => '');
@@ -410,18 +475,25 @@ async function send(def: ProviderDef, key: string, url: string, init: RequestIni
  * A chat function bound to one provider, key and model. It retries once on a
  * busy or slow provider, and adapts to the request fields a model refuses.
  */
-export function createChat(provider: ProviderId, key: string, model: string, f: FetchLike = fetch): ChatFn {
-  const def = BY_ID.get(provider);
-  if (!def) throw new ProviderError('bad_request', 'Unknown provider');
-  if (def.wire === 'demo') return createDemoChat([300, 1400]);
+export function createChat(provider: ProviderId, givenKey: string, model: string, f: FetchLike = fetch): ChatFn {
+  const known = BY_ID.get(provider);
+  if (!known) throw new ProviderError('bad_request', 'Unknown provider');
+  if (known.wire === 'demo') return createDemoChat([300, 1400]);
+  const local = known.id === 'local';
+  const key = local ? localKey(givenKey) : givenKey;
   let relax: Relax = { temperature: false, json: false, completionTokens: false, effort: false, images: false };
 
-  return async function chat(req: ChatRequest): Promise<ChatResult> {
+  return async function chat(given: ChatRequest): Promise<ChatResult> {
+    // Read per call, so a run started before the address was set fails with a clear message rather than a crash.
+    const def = resolve(known);
+    const req = local ? { ...given, timeoutMs: Math.max(given.timeoutMs ?? 0, localTimeoutMs()) } : given;
     let retried = false;
     for (let attempt = 0; attempt < 5; attempt++) {
       const { url, init } = buildRequest(def, key, model, req, relax);
       try {
         const out = readResponse(def, await send(def, key, url, init, req, f));
+        // Some local reasoning models (Qwen, DeepSeek-R1) put their thinking inline ahead of the answer; OI wants the answer alone.
+        if (local) out.text = stripThinking(out.text);
         if (!out.text.trim()) throw new ProviderError('empty', `${def.name} returned an empty answer`);
         return out;
       } catch (err) {
@@ -458,10 +530,12 @@ const OPENAI_RESPONSES_ONLY = /-pro(?:-|$)|codex|deep-research|^sora/i;
  * The models this key can use, from the provider itself. A rejected key fails
  * here, which is why the panel calls this to check a key before a run.
  */
-export async function listModels(provider: ProviderId, key: string, f: FetchLike = fetch): Promise<{ models: ModelEntry[]; listed: boolean }> {
-  const def = BY_ID.get(provider);
-  if (!def) throw new ProviderError('bad_request', 'Unknown provider');
-  if (def.wire === 'demo') return { models: [{ id: 'scripted', name: 'Scripted demo' }], listed: true };
+export async function listModels(provider: ProviderId, givenKey: string, f: FetchLike = fetch): Promise<{ models: ModelEntry[]; listed: boolean }> {
+  const known = BY_ID.get(provider);
+  if (!known) throw new ProviderError('bad_request', 'Unknown provider');
+  if (known.wire === 'demo') return { models: [{ id: 'scripted', name: 'Scripted demo' }], listed: true };
+  const def = resolve(known);
+  const key = def.id === 'local' ? localKey(givenKey) : givenKey;
   const get = async (url: string, headers: Record<string, string>): Promise<ModelListing> => {
     const req: ChatRequest = { system: '', user: '', json: false, maxTokens: 0, timeoutMs: 15_000 };
     return (await send(def, key, url, { method: 'GET', headers }, req, f)) as ModelListing;
@@ -483,7 +557,7 @@ export async function listModels(provider: ProviderId, key: string, f: FetchLike
       const j = await get(`${def.base}/models`, {});
       models = (j?.data ?? []).map(m => ({ id: String(m.id), name: String(m.name || m.id) }));
     } else {
-      const j = await get(`${def.base}/models`, { authorization: `Bearer ${key}` });
+      const j = await get(`${def.base}/models`, key ? { authorization: `Bearer ${key}` } : {});
       models = (j?.data ?? []).map(m => ({ id: String(m.id), name: String(m.id) }));
     }
   } catch (err) {

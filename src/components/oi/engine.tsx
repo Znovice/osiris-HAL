@@ -59,7 +59,8 @@ export function EngineSheet({ engine, setEngine, keyValue, setKey, onDone }: {
     const next = { ...engine, model };
     setEngine(next);
     saveEngine(next);
-    setStatus({ kind: 'ok', text: `Key accepted · ${out.models.length} model${out.models.length === 1 ? '' : 's'} available` });
+    const count = `${out.models.length} model${out.models.length === 1 ? '' : 's'}`;
+    setStatus({ kind: 'ok', text: info.needsKey ? `Key accepted · ${count} available` : `Connected · ${count} installed` });
   };
 
   const setModel = (model: string) => {
@@ -124,6 +125,22 @@ export function EngineSheet({ engine, setEngine, keyValue, setKey, onDone }: {
             {keyValue && <button onClick={() => { forgetKey(engine.provider); setKey(''); setModels(null); setListed(false); setStatus({ kind: 'idle', text: '' }); }} className="text-[var(--text-secondary)] hover:text-[var(--alert-red)]">Forget</button>}
           </div>
         </div>
+      ) : engine.provider === 'local' ? (
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <p className="flex-1 text-[11.5px] leading-relaxed text-[var(--text-secondary)]">
+              Runs on the model this server points at (OSIRIS_LOCAL_LLM_URL, usually Ollama). No key, no cost, nothing leaves your machine.
+            </p>
+            <button onClick={check} disabled={status.kind === 'checking'} className="oi-btn !h-8 flex-shrink-0">
+              {status.kind === 'checking' ? <Loader2 className="w-3 h-3 animate-spin" /> : 'List models'}
+            </button>
+          </div>
+          {status.text && (
+            <p role="status" className="text-[11px] flex items-center gap-1.5" style={{ color: status.kind === 'error' ? T.red : T.goldLight }}>
+              {status.kind === 'ok' && <Check className="w-3 h-3" />}{status.text}
+            </p>
+          )}
+        </div>
       ) : (
         <p className="text-[11.5px] leading-relaxed text-[var(--text-secondary)]">Scripted answers for trying the pipeline on a development server. No key, no cost, no real analysis.</p>
       )}
@@ -132,7 +149,7 @@ export function EngineSheet({ engine, setEngine, keyValue, setKey, onDone }: {
         <div className="flex items-center gap-2">
           <Overline>Model</Overline>
           <span className="ml-auto text-[9.5px] font-mono tracking-[0.1em] uppercase text-[var(--text-muted)]">
-            {models ? (listed ? `${models.length} on this key` : 'Known names') : info.needsKey ? 'Recommended' : ''}
+            {models ? (listed ? (info.needsKey ? `${models.length} on this key` : `${models.length} installed`) : 'Known names') : info.needsKey || engine.provider === 'local' ? 'Recommended' : ''}
           </span>
         </div>
         <ModelPicker provider={engine.provider} models={models ?? known} value={engine.model} onChange={setModel}

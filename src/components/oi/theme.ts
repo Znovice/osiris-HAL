@@ -68,7 +68,7 @@ export const SOLID = 'var(--oi-solid)';
 
 export const pct = (p: number | null | undefined) => (p === null || p === undefined || !Number.isFinite(p) ? '—' : `${Math.round(p * 100)}%`);
 export const initials = (name: string) => name.split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase();
-export const shortName = (name: string) => name.replace(' (Alibaba Cloud)', '').replace(' (scripted, dev only)', '');
+export const shortName = (name: string) => name.replace(' (Alibaba Cloud)', '').replace(' (scripted, dev only)', '').replace(' (Ollama)', '');
 
 export const KIND_LABEL: Record<Frame['kind'], string> = { binary: 'Yes / no', choice: 'Which outcome', number: 'How much' };
 export const KIND_SHORT: Record<Frame['kind'], string> = { binary: 'Yes / no', choice: 'Which', number: 'How much' };

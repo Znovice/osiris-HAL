@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import { PROVIDERS, ProviderError, createChat, isPlausibleKey, isPlausibleModel, listModels, pickModel, scrub } from './providers';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { PROVIDERS, ProviderError, canSeeImages, createChat, isPlausibleKey, isPlausibleModel, listModels, localBase, pickModel, scrub, stripThinking } from './providers';
 
 const KEY = 'sk-test-0123456789abcdef';
 
@@ -46,7 +46,7 @@ describe('keys and models', () => {
 
   it('lists the providers, the demo only outside production', () => {
     expect(PROVIDERS.map(p => p.id)).toEqual(expect.arrayContaining(['openai', 'anthropic', 'google', 'openrouter']));
-    expect(PROVIDERS.every(p => p.needsKey === (p.id !== 'demo'))).toBe(true);
+    expect(PROVIDERS.every(p => p.needsKey === (p.id !== 'demo' && p.id !== 'local'))).toBe(true);
   });
 });
 
@@ -152,5 +152,84 @@ describe('listModels', () => {
     const out = await listModels('qwen', KEY, f);
     expect(out.listed).toBe(false);
     expect(out.models[0].id).toBe('qwen-plus');
+  });
+});
+
+describe('local model', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('takes its address from the server environment only, and only a plain http(s) URL', () => {
+    expect(localBase({})).toBe('');
+    expect(localBase({ OSIRIS_LOCAL_LLM_URL: 'http://localhost:11434/v1/' })).toBe('http://localhost:11434/v1');
+    expect(localBase({ OSIRIS_LOCAL_LLM_URL: 'file:///etc/passwd' })).toBe('');
+    expect(localBase({ OSIRIS_LOCAL_LLM_URL: 'http://user:pw@host:1234/v1' })).toBe('');
+    expect(localBase({ OSIRIS_LOCAL_LLM_URL: 'not a url' })).toBe('');
+  });
+
+  it('is offered without a key', () => {
+    expect(PROVIDERS.find(p => p.id === 'local')).toMatchObject({ needsKey: false, concurrency: 1 });
+  });
+
+  it('explains how to configure it when no address is set', async () => {
+    vi.stubEnv('OSIRIS_LOCAL_LLM_URL', '');
+    const { f, calls } = fakeFetch();
+    const err = await createChat('local', '', 'qwen3.5:9b', f)(REQ).catch(e => e);
+    expect(err).toBeInstanceOf(ProviderError);
+    expect(err.message).toMatch(/OSIRIS_LOCAL_LLM_URL/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('speaks OpenAI to the configured address, with no Authorization header when there is no key', async () => {
+    vi.stubEnv('OSIRIS_LOCAL_LLM_URL', 'http://localhost:11434/v1');
+    vi.stubEnv('OSIRIS_LOCAL_LLM_KEY', '');
+    const { f, calls } = fakeFetch(openaiReply('{"a":1}'));
+    const out = await createChat('local', '', 'qwen3.5:9b', f)(REQ);
+    expect(out.text).toBe('{"a":1}');
+    expect(calls[0].url).toBe('http://localhost:11434/v1/chat/completions');
+    expect((calls[0].init.headers as Record<string, string>).authorization).toBeUndefined();
+    expect(calls[0].body).toMatchObject({ model: 'qwen3.5:9b', max_tokens: 500, response_format: { type: 'json_object' } });
+  });
+
+  it('sends the server key when the caller gives none (OmniRoute, LM Studio)', async () => {
+    vi.stubEnv('OSIRIS_LOCAL_LLM_URL', 'http://localhost:20128/v1');
+    vi.stubEnv('OSIRIS_LOCAL_LLM_KEY', 'omni-key-123456');
+    const { f, calls } = fakeFetch(openaiReply('ok'));
+    await createChat('local', '', 'auto', f)(REQ);
+    expect((calls[0].init.headers as Record<string, string>).authorization).toBe('Bearer omni-key-123456');
+  });
+
+  it('strips inline thinking from a reasoning model', async () => {
+    vi.stubEnv('OSIRIS_LOCAL_LLM_URL', 'http://localhost:11434/v1');
+    const { f } = fakeFetch(openaiReply('<think>let me consider</think>\n{"a":1}'));
+    expect((await createChat('local', '', 'qwen3.5:9b', f)(REQ)).text).toBe('{"a":1}');
+    expect(stripThinking('<think>ran out of tokens')).toBe('');
+    expect(stripThinking('{"plain":true}')).toBe('{"plain":true}');
+  });
+
+  it('says Ollama may not be running when it cannot connect', async () => {
+    vi.stubEnv('OSIRIS_LOCAL_LLM_URL', 'http://localhost:11434/v1');
+    const f = vi.fn(async () => { throw new TypeError('fetch failed'); }) as unknown as typeof fetch;
+    const err = await createChat('local', '', 'qwen3.5:9b', f)({ ...REQ, timeoutMs: 20_000 }).catch(e => e);
+    expect(err.code).toBe('network');
+    expect(err.message).toMatch(/Ollama running/);
+  }, 10_000);
+
+  it('lists the installed models without a key', async () => {
+    vi.stubEnv('OSIRIS_LOCAL_LLM_URL', 'http://localhost:11434/v1');
+    const { f, calls } = fakeFetch(jsonRes({ data: [{ id: 'llama3.2:latest' }, { id: 'qwen3.5:9b' }, { id: 'nomic-embed-text:latest' }] }));
+    const { models, listed } = await listModels('local', '', f);
+    expect(listed).toBe(true);
+    expect(calls[0].url).toBe('http://localhost:11434/v1/models');
+    expect(models.map(m => m.id)).toEqual(['qwen3.5:9b', 'llama3.2:latest']);
+    expect(pickModel('local', models)).toBe('qwen3.5:9b');
+  });
+
+  it('guesses which local models can see pictures', () => {
+    expect(canSeeImages('local', 'gemma3:12b')).toBe(true);
+    expect(canSeeImages('local', 'llava:7b')).toBe(true);
+    expect(canSeeImages('local', 'llama3.2-vision')).toBe(true);
+    expect(canSeeImages('local', 'qwen2.5vl:7b')).toBe(true);
+    expect(canSeeImages('local', 'qwen3.5:9b')).toBe(false);
+    expect(canSeeImages('local', 'llama3.2')).toBe(false);
   });
 });
