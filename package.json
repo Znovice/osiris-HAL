@@ -4,10 +4,10 @@
   "private": true,
   "scripts": {
     "predev": "node tools/prepare-map-worker.mjs",
-    "dev": "next dev",
+    "dev": "node tools/serve.mjs dev",
     "prebuild": "node tools/prepare-map-worker.mjs",
     "build": "next build",
-    "start": "next start",
+    "start": "node tools/serve.mjs start",
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
